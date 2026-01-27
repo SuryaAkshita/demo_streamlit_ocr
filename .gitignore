@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+*.log
+
+# model / cache
+.cache/
+models/
+*.bin
+
+# PDFs / outputs
+*.pdf
+structured_output.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Colab / notebooks
+.ipynb_checkpoints/
