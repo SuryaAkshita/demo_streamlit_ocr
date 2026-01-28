@@ -102,7 +102,7 @@ st.markdown(
         box-shadow: 0 14px 45px rgba(0,0,0,0.35) !important;
     }
 
-    .stTextInput input, .stTextArea textarea {
+    .stTextInput input, .stTextArea textarea, .stNumberInput input {
         background: rgba(255,255,255,0.05) !important;
         border-radius: 14px !important;
         border: 1px solid rgba(255,255,255,0.12) !important;
@@ -113,6 +113,13 @@ st.markdown(
         background: rgba(255,255,255,0.04) !important;
         border-radius: 16px !important;
         border: 1px solid rgba(255,255,255,0.10) !important;
+    }
+
+    /* ✅ NEW: Quick preset buttons styling */
+    .stButton.preset-btn > button {
+        background: rgba(255,255,255,0.08) !important;
+        font-size: 0.85rem !important;
+        padding: 0.4rem 0.8rem !important;
     }
     </style>
     """,
@@ -140,22 +147,70 @@ st.markdown(
 # ---------------------------
 with st.sidebar:
     st.markdown("## Extraction Settings")
-    max_pages = st.slider("Maximum pages to process", 1, 20, 5)
+    
+    # ✅ NEW: Page range controls
+    st.markdown("### Page Range")
+    
+    page_mode = st.radio(
+        "Select mode:",
+        ["All Pages", "Custom Range"],
+        label_visibility="collapsed"
+    )
+    
+    if page_mode == "Custom Range":
+        col1, col2 = st.columns(2)
+        with col1:
+            start_page = st.number_input(
+                "Start Page",
+                min_value=1,
+                value=1,
+                step=1
+            )
+        with col2:
+            end_page = st.number_input(
+                "End Page",
+                min_value=1,
+                value=5,
+                step=1,
+                help="Leave as-is or adjust"
+            )
+        
+        # ✅ NEW: Quick preset buttons
+        st.markdown("**Quick Presets:**")
+        preset_cols = st.columns(3)
+        with preset_cols[0]:
+            if st.button("First 5", key="preset_5"):
+                start_page = 1
+                end_page = 5
+        with preset_cols[1]:
+            if st.button("First 10", key="preset_10"):
+                start_page = 1
+                end_page = 10
+        with preset_cols[2]:
+            if st.button("Pages 3-7", key="preset_3_7"):
+                start_page = 3
+                end_page = 7
+    else:
+        start_page = 1
+        end_page = None
+    
+    st.markdown("---")
+    st.markdown("### Display Options")
     show_raw_json = st.toggle("Show raw JSON output", True)
     show_tables = st.toggle("Show tables", True)
     show_form_fields = st.toggle("Show form fields", True)
 
     st.markdown("---")
-    st.markdown("## Backend Status")
+    st.markdown("### Backend Status")
 
     try:
         ping = requests.get("http://127.0.0.1:8000/", timeout=2)
         if ping.status_code == 200:
-            st.success("Backend is running")
+            st.success("✅ Backend is running")
         else:
-            st.warning("Backend responded with an issue")
+            st.warning("⚠️ Backend responded with an issue")
     except:
-        st.error("Backend is not running")
+        st.error("❌ Backend is not running")
 
 # ---------------------------
 # MAIN UI
@@ -168,8 +223,14 @@ with left:
     uploaded = st.file_uploader("Select a PDF file", type=["pdf"], label_visibility="collapsed")
 
     if uploaded:
-        st.success(f"File selected: {uploaded.name}")
+        st.success(f"✓ File selected: **{uploaded.name}**")
         st.caption(datetime.now().strftime("Uploaded on %d %b %Y, %I:%M %p"))
+        
+        # ✅ NEW: Show page range info
+        if page_mode == "Custom Range":
+            st.info(f"📄 Will extract pages **{start_page}** to **{end_page}**")
+        else:
+            st.info("📄 Will extract **all pages** from the document")
     else:
         st.info("Please upload a PDF to continue.")
 
@@ -178,7 +239,7 @@ with left:
 with right:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.subheader("Run Extraction")
-    run_btn = st.button("Start Extraction")
+    run_btn = st.button("🚀 Start Extraction")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------------------------
@@ -188,15 +249,36 @@ if "result" not in st.session_state:
     st.session_state.result = None
 
 if run_btn and uploaded:
+    # ✅ NEW: Build URL with page parameters
+    params = {"start_page": start_page}
+    if end_page is not None:
+        params["end_page"] = end_page
+    
     files = {"file": (uploaded.name, uploaded.getvalue(), "application/pdf")}
-    with st.spinner("Running extraction..."):
-        res = requests.post(FASTAPI_URL, files=files, timeout=600)
+    
+    with st.spinner(f"🔄 Running extraction on pages {start_page}-{end_page or 'end'}..."):
+        try:
+            # ✅ NEW: Pass params to backend
+            res = requests.post(FASTAPI_URL, files=files, params=params, timeout=600)
 
-    if res.status_code == 200:
-        st.session_state.result = res.json()
-        st.success("Extraction completed successfully")
-    else:
-        st.error("Extraction failed")
+            if res.status_code == 200:
+                st.session_state.result = res.json()
+                st.success("✅ Extraction completed successfully")
+            else:
+                st.error(f"❌ Extraction failed (Status: {res.status_code})")
+                st.code(res.text)
+        
+        except requests.exceptions.Timeout:
+            st.error("⏱️ Request timed out. The PDF may be too large or Colab is slow.")
+        
+        except requests.exceptions.ConnectionError:
+            st.error("🔌 Cannot connect to backend. Make sure FastAPI is running on port 8000.")
+        
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+
+elif run_btn and not uploaded:
+    st.warning("⚠️ Please upload a PDF file first")
 
 # ---------------------------
 # RESULTS
@@ -204,36 +286,143 @@ if run_btn and uploaded:
 result = st.session_state.result
 
 if result:
-    st.markdown("## Extracted Output")
-
-    doc = result.get("document", {})
-    pages = result.get("pages", [])
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(f"<div class='metric-card'><div class='label'>File Name</div><div class='value'>{doc.get('file_name','—')}</div></div>", unsafe_allow_html=True)
-    with c2:
-        st.markdown(f"<div class='metric-card'><div class='label'>Document Type</div><div class='value'>{doc.get('document_type','—')}</div></div>", unsafe_allow_html=True)
-    with c3:
-        st.markdown(f"<div class='metric-card'><div class='label'>Pages Extracted</div><div class='value'>{len(pages)}</div></div>", unsafe_allow_html=True)
-
     st.markdown("---")
+    st.markdown("## 📊 Extracted Output")
 
-    tab1, tab2, tab3 = st.tabs(["Client View", "Raw JSON", "Export"])
-
-    with tab1:
-        for p in pages:
-            with st.expander(f"Page {p.get('page','—')}"):
-                if show_form_fields:
-                    st.json(p.get("form_fields", {}))
-                if show_tables:
-                    st.json(p.get("tables", {}))
-
-    with tab2:
-        if show_raw_json:
+    # ✅ IMPROVED: Handle error responses
+    if result.get("status") == "error":
+        st.error(f"❌ Extraction Error: {result.get('message', 'Unknown error')}")
+        with st.expander("View Error Details"):
             st.json(result)
+    else:
+        doc = result.get("document", {})
+        pages = result.get("pages", [])
 
-    with tab3:
-        json_text = json.dumps(result, indent=2)
-        st.download_button("Download JSON", json_text, "output.json", "application/json")
-        st.text_area("JSON Output", json_text, height=250)
+        # ✅ NEW: Show page range in metrics
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(
+                f"<div class='metric-card'><div class='label'>File Name</div><div class='value'>{doc.get('file_name','—')}</div></div>",
+                unsafe_allow_html=True
+            )
+        with c2:
+            st.markdown(
+                f"<div class='metric-card'><div class='label'>Document Type</div><div class='value'>{doc.get('document_type','—')}</div></div>",
+                unsafe_allow_html=True
+            )
+        with c3:
+            st.markdown(
+                f"<div class='metric-card'><div class='label'>Pages Processed</div><div class='value'>{doc.get('pages_processed', len(pages))}</div></div>",
+                unsafe_allow_html=True
+            )
+        with c4:
+            st.markdown(
+                f"<div class='metric-card'><div class='label'>Page Range</div><div class='value'>{doc.get('page_range', '—')}</div></div>",
+                unsafe_allow_html=True
+            )
+
+        st.markdown("---")
+
+        tab1, tab2, tab3 = st.tabs(["📄 Client View", "🔧 Raw JSON", "💾 Export"])
+
+        with tab1:
+            if not pages:
+                st.info("No pages extracted")
+            else:
+                for p in pages:
+                    page_num = p.get('page', '—')
+                    section = p.get('section', 'Unknown Section')
+                    
+                    with st.expander(f"📄 Page {page_num}: {section}", expanded=(page_num == start_page)):
+                        # Show section header
+                        st.markdown(f"**Section:** {section}")
+                        
+                        # ✅ IMPROVED: Better display of different data types
+                        if show_form_fields and "form_fields" in p and p["form_fields"]:
+                            st.markdown("##### 📝 Form Fields")
+                            st.json(p["form_fields"])
+                        
+                        if show_tables and "tables" in p and p["tables"]:
+                            st.markdown("##### 📊 Tables")
+                            # Try to display as dataframe if possible
+                            for table_name, table_data in p["tables"].items():
+                                st.markdown(f"**{table_name}**")
+                                if isinstance(table_data, list) and table_data:
+                                    try:
+                                        import pandas as pd
+                                        df = pd.DataFrame(table_data)
+                                        st.dataframe(df, use_container_width=True)
+                                    except:
+                                        st.json(table_data)
+                                else:
+                                    st.json(table_data)
+                        
+                        # Show checkboxes if present
+                        if "checkboxes" in p and p["checkboxes"]:
+                            st.markdown("##### ☑️ Checkboxes")
+                            st.json(p["checkboxes"])
+                        
+                        # Show signatures if present
+                        if "signatures" in p and p["signatures"]:
+                            st.markdown("##### ✍️ Signatures")
+                            st.json(p["signatures"])
+                        
+                        # Show errors if any
+                        if "error_message" in p:
+                            st.error(f"⚠️ Error: {p['error_message']}")
+
+        with tab2:
+            if show_raw_json:
+                st.json(result)
+
+        with tab3:
+            json_text = json.dumps(result, indent=2, ensure_ascii=False)
+            
+            # ✅ IMPROVED: Better filename with page range
+            if page_mode == "Custom Range":
+                filename = f"extracted_pages_{start_page}-{end_page}.json"
+            else:
+                filename = f"extracted_all_pages.json"
+            
+            st.download_button(
+                "📥 Download JSON",
+                json_text,
+                filename,
+                "application/json",
+                use_container_width=True
+            )
+            
+            st.text_area("JSON Output", json_text, height=300)
+            
+            # ✅ NEW: Copy to clipboard button helper
+            st.caption("💡 Tip: Use the download button above or copy from the text area")
+
+# ---------------------------
+# ✅ NEW: Footer with usage tips
+# ---------------------------
+st.markdown("---")
+with st.expander("ℹ️ Usage Tips"):
+    st.markdown("""
+    ### How to Use:
+    1. **Upload PDF**: Select your document using the file uploader
+    2. **Choose Range**: Select "All Pages" or "Custom Range" in the sidebar
+    3. **Quick Presets**: Use preset buttons for common ranges (First 5, First 10, etc.)
+    4. **Extract**: Click "Start Extraction" to begin processing
+    5. **Review**: View results in Client View tab or export as JSON
+    
+    ### Page Range Examples:
+    - **All Pages**: Processes entire document
+    - **Pages 1-5**: Only extracts first 5 pages
+    - **Pages 3-7**: Extracts pages 3 through 7
+    - **Pages 10-end**: Set start_page=10, use "All Pages" mode
+    
+    ### Performance Tips:
+    - Processing takes ~4-5 seconds per page
+    - For large documents (20+ pages), consider processing in batches
+    - Use Custom Range to test on a few pages first
+    
+    ### Display Options:
+    - Toggle tables/form fields visibility in sidebar
+    - Tables are displayed as interactive dataframes when possible
+    - Download extracted data as JSON for further processing
+    """)
