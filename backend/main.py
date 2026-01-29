@@ -12,12 +12,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ PUT YOUR NGROK LINK HERE (BASE URL ONLY)
-COLAB_URL = "https://subopposite-untransiently-renata.ngrok-free.dev"
+#  PUT YOUR NGROK LINK HERE (BASE URL ONLY)
+COLAB_URL = "https://25372d7175d3.ngrok-free.app"
 
 @app.get("/")
 def health():
-    return {"status": "ok", "message": "Backend running ✅"}
+    return {"status": "ok", "message": "Backend running smoothly."}
 
 @app.post("/run-ocr")
 async def run_ocr(
