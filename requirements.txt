@@ -1,0 +1,22 @@
+# Core Services & APIs
+fastapi
+uvicorn
+streamlit
+requests
+python-multipart
+
+# Data Processing
+pandas
+tqdm
+
+# PDF & Image Handling
+pdf2image
+pymupdf
+pillow
+
+# Machine Learning & OCR (AWS GPU)
+torch
+transformers
+bitsandbytes
+accelerate
+torchvision

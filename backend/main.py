@@ -7,6 +7,7 @@ from fastapi import FastAPI, UploadFile, File, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import requests
 from backend.inference import load_context, clear_gpu, ModelNotLoadedError
 from backend.pdf_extract import extract_pdf_multi
 
@@ -80,9 +81,41 @@ async def run_ocr(
     end_page: int = Query(None, ge=1, description="Ending page number (None = all pages)")
 ):
     """
-    Runs InternVL OCR extraction locally (no Colab, no ngrok).
-    Accepts page range params like your previous proxy endpoint.
+    Runs InternVL OCR extraction.
+    If REMOTE_OCR_URL is set and DISABLE_MODEL_LOAD=1, proxies to remote GPU instance.
     """
+    # 1. Check if we should proxy to AWS
+    remote_url = os.getenv("REMOTE_OCR_URL")
+    disable_local = os.getenv("DISABLE_MODEL_LOAD", "0") == "1"
+
+    if disable_local and remote_url:
+        print(f"📡 Proxying OCR request to remote AWS GPU: {remote_url}")
+        try:
+            # Prepare data and files for remote request
+            pdf_bytes = await file.read()
+            remote_params = {"start_page": start_page, "end_page": end_page}
+            remote_files = {"file": (file.filename, pdf_bytes, file.content_type)}
+
+            # Forward the request (note: timeout increased for OCR)
+            response = requests.post(
+                f"{remote_url.rstrip('/')}/run-ocr",
+                params=remote_params,
+                files=remote_files,
+                timeout=600
+            )
+
+            # Return the remote response
+            return JSONResponse(
+                status_code=response.status_code,
+                content=response.json()
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=502,
+                content={"status": "error", "message": f"Proxy failed: {str(e)}", "hint": "Check if AWS instance is running and accessible."}
+            )
+
+    # 2. Local/Standard processing
     try:
         pdf_bytes = await file.read()
 
