@@ -19,3 +19,4 @@ Thumbs.db
 
 # Colab / notebooks
 .ipynb_checkpoints/
+venv/
