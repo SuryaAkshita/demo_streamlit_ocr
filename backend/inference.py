@@ -5,7 +5,7 @@
 # ============================================
 import os
 
-os.environ["TRANSFORMERS_NO_META"] = "1"
+# os.environ["TRANSFORMERS_NO_META"] = "1"  # Disable if causing issues
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
@@ -85,7 +85,8 @@ def load_context() -> InferenceContext:
             trust_remote_code=True,
             torch_dtype=DTYPE,
             quantization_config=quantization_config,
-            use_flash_attn=False
+            use_flash_attn=False,
+            device_map="auto"  # Crucial for bitsandbytes
         ).eval()
 
         print("✅ Model loaded with 4-bit quantization")
