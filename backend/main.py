@@ -1,9 +1,52 @@
-from fastapi import FastAPI, UploadFile, File, Query
+# backend/main.py
+
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, UploadFile, File, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-import requests
+from fastapi.responses import JSONResponse
 
-app = FastAPI()
+from backend.inference import load_context, clear_gpu, ModelNotLoadedError
+from backend.pdf_extract import extract_pdf_multi
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Loads the model ONCE at startup (AWS GPU), unless DISABLE_MODEL_LOAD=1.
+    FastAPI lifespan runs startup/shutdown logic exactly once for the application lifetime. [1](https://dev.to/ikoh_sylva/aws-security-groups-for-ec2-instances-a-comprehensive-guide-4fp9)
+    """
+    disable = os.getenv("DISABLE_MODEL_LOAD", "0") == "1"
+
+    if disable:
+        app.state.model_loaded = False
+        yield
+        return
+
+    # ✅ Force model load at startup (not first request)
+    try:
+        load_context()
+        app.state.model_loaded = True
+        print("✅ Model loaded at startup (lifespan).")
+    except Exception as e:
+        app.state.model_loaded = False
+        print(f"❌ Model failed to load at startup: {e}")
+        # You can choose to raise here to fail fast:
+        # raise
+
+    yield
+
+    # Shutdown cleanup
+    try:
+        clear_gpu()
+    except Exception:
+        pass
+
+
+app = FastAPI(lifespan=lifespan)
+
+# CORS (your original settings)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -12,12 +55,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-#  PUT YOUR NGROK LINK HERE (BASE URL ONLY)
-COLAB_URL = "https://25372d7175d3.ngrok-free.app"
 
 @app.get("/")
 def health():
-    return {"status": "ok", "message": "Backend running smoothly."}
+    return {"status": "ok", "message": "Backend running ✅"}
+
+
+@app.get("/health")
+def detailed_health(request: Request):
+    """
+    Returns whether model is loaded. Useful for AWS readiness checks.
+    """
+    return {
+        "status": "ok",
+        "model_loaded": bool(getattr(request.app.state, "model_loaded", False)),
+        "disable_model_load": os.getenv("DISABLE_MODEL_LOAD", "0") == "1"
+    }
+
 
 @app.post("/run-ocr")
 async def run_ocr(
@@ -26,67 +80,46 @@ async def run_ocr(
     end_page: int = Query(None, ge=1, description="Ending page number (None = all pages)")
 ):
     """
-    ✅ UPDATED: Now supports page range parameters
-    
-    Examples:
-        POST /run-ocr (all pages)
-        POST /run-ocr?start_page=1&end_page=5 (pages 1-5)
-        POST /run-ocr?start_page=3&end_page=7 (pages 3-7)
+    Runs InternVL OCR extraction locally (no Colab, no ngrok).
+    Accepts page range params like your previous proxy endpoint.
     """
     try:
         pdf_bytes = await file.read()
 
-        # ✅ NEW: Pass page range parameters to Colab
-        params = {
-            "start_page": start_page,
-        }
-        if end_page is not None:
-            params["end_page"] = end_page
+        # Wrap bytes like your previous DummyUpload (keeps extract_pdf_multi unchanged)
+        class DummyUpload:
+            def __init__(self, b: bytes, name: str = "file.pdf"):
+                self._bytes = b
+                self.name = name
 
-        r = requests.post(
-            f"{COLAB_URL}/extract_pdf",
-            files={"file": (file.filename, pdf_bytes, "application/pdf")},
-            params=params,  # ✅ NEW: Send page range params
-            timeout=600
+            def getvalue(self):
+                return self._bytes
+
+        pdf_file = DummyUpload(pdf_bytes, name=file.filename)
+
+        # ✅ Call your actual extraction pipeline
+        result = extract_pdf_multi(
+            pdf_file,
+            pdf_filename=file.filename,
+            start_page=start_page,
+            end_page=end_page
         )
 
-        if r.status_code != 200:
-            return {
+        return JSONResponse(content=result)
+
+    except ModelNotLoadedError as e:
+        # Happens on office laptop when DISABLE_MODEL_LOAD=1
+        return JSONResponse(
+            status_code=503,
+            content={
                 "status": "error",
-                "colab_status": r.status_code,
-                "colab_response": r.text
+                "message": str(e),
+                "hint": "On AWS GPU set DISABLE_MODEL_LOAD=0 (or unset it)."
             }
+        )
 
-        return r.json()
-
-    except requests.exceptions.Timeout:
-        return {
-            "status": "error", 
-            "message": "Request timed out. PDF may be too large or Colab is slow."
-        }
-    except requests.exceptions.ConnectionError:
-        return {
-            "status": "error",
-            "message": "Cannot connect to Colab. Check if ngrok URL is correct and Colab is running."
-        }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-# ✅ OPTIONAL: Add endpoint to test Colab connection
-@app.get("/test-colab")
-def test_colab():
-    """Test if Colab backend is reachable"""
-    try:
-        r = requests.get(f"{COLAB_URL}/", timeout=10)
-        return {
-            "status": "connected",
-            "colab_response": r.json(),
-            "colab_url": COLAB_URL
-        }
-    except Exception as e:
-        return {
-            "status": "disconnected",
-            "error": str(e),
-            "colab_url": COLAB_URL
-        }
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
