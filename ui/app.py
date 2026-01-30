@@ -1,9 +1,10 @@
+import os
 import streamlit as st
 import requests
 import json
 from datetime import datetime
 
-BASE_BACKEND_URL = "http://13.60.77.224:8000"
+BASE_BACKEND_URL = os.getenv("BASE_BACKEND_URL", "http://13.60.77.224:8000")
 FASTAPI_URL = f"{BASE_BACKEND_URL}/run-ocr"
 
 # ---------------------------
