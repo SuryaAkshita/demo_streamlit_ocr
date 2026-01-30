@@ -3,7 +3,8 @@ import requests
 import json
 from datetime import datetime
 
-FASTAPI_URL = "http://127.0.0.1:8000/run-ocr"
+BASE_BACKEND_URL = "http://13.60.77.224:8000"
+FASTAPI_URL = f"{BASE_BACKEND_URL}/run-ocr"
 
 # ---------------------------
 # PAGE CONFIG
@@ -202,9 +203,10 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Backend Status")
+    st.caption(f"Backend: {BASE_BACKEND_URL}")
 
     try:
-        ping = requests.get("http://127.0.0.1:8000/", timeout=2)
+        ping = requests.get(f"{BASE_BACKEND_URL}/health", timeout=3)
         if ping.status_code == 200:
             st.success("✅ Backend is running")
         else:

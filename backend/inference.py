@@ -54,10 +54,6 @@ _CTX = None
 
 
 def load_context() -> InferenceContext:
-    """
-    Loads tokenizer + model exactly like your code.
-    Called once, then cached.
-    """
     global _CTX
 
     disable = os.getenv("DISABLE_MODEL_LOAD", "0") == "1"
@@ -68,51 +64,71 @@ def load_context() -> InferenceContext:
         return _CTX
 
     print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_PATH,
+        trust_remote_code=True,
+        use_fast=False
+    )
 
     print("Loading model...")
 
+    # Tesla T4 => float16 (bf16 not supported)
+    dtype = torch.float16
+
+    # -------------------------
+    # 1) Try 4-bit (preferred)
+    # -------------------------
     try:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=DTYPE,
+            bnb_4bit_compute_dtype=dtype,
             bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4"
+            bnb_4bit_quant_type="nf4",
         )
 
         model = AutoModel.from_pretrained(
             MODEL_PATH,
             trust_remote_code=True,
-            torch_dtype=DTYPE,
             quantization_config=quantization_config,
+            torch_dtype=dtype,
             use_flash_attn=False,
-            device_map="auto"  # Crucial for bitsandbytes
+
+            # ✅ Avoid accelerate "auto" mapping (meta-init can break remote-code models)
+            device_map={"": 0},
+
+            # ✅ Prevent meta tensors / lazy init
+            low_cpu_mem_usage=False,
         ).eval()
 
         print("✅ Model loaded with 4-bit quantization")
 
     except Exception as e:
         print(f"⚠️ 4-bit loading failed: {e}")
-        print("Trying fallback: loading in bfloat16/float16...")
+        print("Trying fallback: loading in float16 (no quantization)...")
 
+        # -------------------------
+        # 2) Fallback: FP16 full load
+        # -------------------------
         model = AutoModel.from_pretrained(
             MODEL_PATH,
             trust_remote_code=True,
-            torch_dtype=DTYPE,
-            use_flash_attn=False
-        ).to(DEVICE).eval()
+            torch_dtype=dtype,
+            use_flash_attn=False,
 
-        print("✅ Model loaded in bfloat16/float16 (no quantization)")
+            # ✅ Make sure we do NOT trigger meta init here either
+            device_map=None,
+            low_cpu_mem_usage=False,
+        ).to("cuda").eval()
 
-    print(f"✅ Using device: {DEVICE}")
+        print("✅ Model loaded in float16 (no quantization)")
+
+    print("✅ Using device: cuda")
     print(f"✅ Model is on: {next(model.parameters()).device}")
-    if torch.cuda.is_available():
-        print(f"✅ GPU name: {torch.cuda.get_device_name(0)}")
-        print(f"✅ GPU memory allocated: {torch.cuda.memory_allocated(0)/1024**3:.2f} GB")
+    print(f"✅ GPU name: {torch.cuda.get_device_name(0)}")
+    print(f"✅ GPU memory allocated: {torch.cuda.memory_allocated(0)/1024**3:.2f} GB")
 
     _CTX = InferenceContext(model=model, tokenizer=tokenizer)
     return _CTX
-
 
 def get_context() -> InferenceContext:
     """

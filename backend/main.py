@@ -2,7 +2,7 @@
 
 import os
 from contextlib import asynccontextmanager
-
+import traceback
 from fastapi import FastAPI, UploadFile, File, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,33 +12,27 @@ from backend.inference import load_context, clear_gpu, ModelNotLoadedError
 from backend.pdf_extract import extract_pdf_multi
 
 
+# backend/main.py
+import traceback
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Loads the model ONCE at startup (AWS GPU), unless DISABLE_MODEL_LOAD=1.
-    FastAPI lifespan runs startup/shutdown logic exactly once for the application lifetime. [1](https://dev.to/ikoh_sylva/aws-security-groups-for-ec2-instances-a-comprehensive-guide-4fp9)
-    """
     disable = os.getenv("DISABLE_MODEL_LOAD", "0") == "1"
-
     if disable:
         app.state.model_loaded = False
         yield
         return
 
-    # ✅ Force model load at startup (not first request)
     try:
         load_context()
         app.state.model_loaded = True
         print("✅ Model loaded at startup (lifespan).")
     except Exception as e:
         app.state.model_loaded = False
+        traceback.print_exc()  # <-- IMPORTANT: shows the real failing line
         print(f"❌ Model failed to load at startup: {e}")
-        # You can choose to raise here to fail fast:
-        # raise
 
     yield
-
-    # Shutdown cleanup
     try:
         clear_gpu()
     except Exception:
